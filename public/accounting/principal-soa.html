@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Principal SOA — Harbor Desk</title><link rel="stylesheet" href="/css/style.css">
+<style>
+  .sum{display:flex;gap:22px;flex-wrap:wrap;background:#F7F8F9;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;}
+  .pill{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:5px;}
+  .p-Charge{background:#E3F1FB;color:#0F5A8A;} .p-Paid{background:#FFF4C2;color:#8A6A00;} .p-Received{background:#E7F5EE;color:#1F8A5F;}
+  @media print{.topnav,.noprint{display:none !important;}}
+</style>
+</head>
+<body>
+<div class="topnav" id="topnav"></div>
+<div class="wrap">
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+      <div><h2>Principal SOA</h2>
+        <p class="sub">Statement of account for a shipping line we act for as agent — charges recovered from it (Principal-type charge codes on its Line Agency jobs), plus what we pay and receive on its behalf. A positive balance means the principal owes us.</p></div>
+      <div class="noprint"><button class="btn btn-sm" onclick="window.print()">🖨 Print</button></div>
+    </div>
+    <div class="grid noprint" style="margin-top:8px;">
+      <div class="field"><label>Principal</label><select id="pSel"></select></div>
+      <div class="field"><label>From</label><input type="date" id="pFrom"></div>
+      <div class="field"><label>To</label><input type="date" id="pTo"></div>
+      <div style="display:flex;align-items:end;"><button class="btn btn-sm btn-primary" id="goBtn">Show</button></div>
+    </div>
+    <div id="head" style="margin-top:8px;font-weight:600;"></div>
+    <div class="sum" id="sum" style="display:none;"></div>
+    <div id="tbl"></div>
+  </div>
+
+  <div class="panel noprint">
+    <h2>Record Entry</h2>
+    <p class="sub"><b>Paid on behalf</b> — we paid something for the principal (it now owes us). <b>Received</b> — money received from the principal (reduces what it owes). Both post to the ledger.</p>
+    <div class="grid">
+      <div class="field"><label>Type *</label><select id="eType"><option>Paid on behalf</option><option>Received</option></select></div>
+      <div class="field"><label>Date *</label><input type="date" id="eDate"></div>
+      <div class="field"><label id="eAccLabel">Paid from (bank / cash) *</label><select id="eAcc"></select></div>
+      <div class="field"><label>Amount (AED) *</label><input type="number" id="eAmt" min="0" step="0.01"></div>
+      <div class="field"><label>Job # <span class="sub" style="font-weight:400;">(optional)</span></label><input id="eJob" class="mono" placeholder="e.g. EXP-00001/26"></div>
+      <div class="field"><label>Reference</label><input id="eRef" placeholder="Cheque / txn no."></div>
+    </div>
+    <div class="field" style="margin-top:8px;"><label>Description</label><input id="eDesc" placeholder="What was paid / received"></div>
+    <div class="btn-row"><button class="btn btn-primary" id="saveE">Save Entry</button></div>
+  </div>
+</div>
+<script src="/js/api.js"></script>
+<script>
+const E = (v) => String(v ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const today = () => new Date().toISOString().slice(0, 10);
+async function show() {
+  const name = document.getElementById("pSel").value;
+  if (!name) { document.getElementById("tbl").innerHTML = `<div class="empty">No principal yet — tick "Principal" on a party under Customers &amp; Vendors, or pick one on a Line Agency booking.</div>`; return; }
+  const p = new URLSearchParams(); const f = pFrom.value, t = pTo.value; if (f) p.set("from", f); if (t) p.set("to", t);
+  const d = await api("GET", `/api/principal-soa/${encodeURIComponent(name)}?${p}`);
+  document.getElementById("head").textContent = `Statement of account — ${d.principal}${f || t ? `  (${f || "start"} to ${t || "today"})` : ""}`;
+  const s = document.getElementById("sum"); s.style.display = "";
+  s.innerHTML = `<div>Opening: <b class="mono">${fmt(d.opening)}</b></div><div>Charges &amp; paid on behalf (Dr): <b class="mono">${fmt(d.total_debit)}</b></div><div>Received (Cr): <b class="mono">${fmt(d.total_credit)}</b></div><div>Closing balance receivable: <b class="mono">${fmt(d.opening + d.total_debit - d.total_credit)}</b></div>`;
+  document.getElementById("tbl").innerHTML = d.rows.length ? `<table><thead><tr><th>Date</th><th>Type</th><th>Ref</th><th>Job #</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
+    ${d.rows.map(e => `<tr><td class="mono">${E(e.date)}</td><td><span class="pill p-${E(e.type.split(" ")[0])}">${E(e.type)}</span></td><td class="mono">${E(e.ref)}</td><td class="mono">${E(e.job_no || "")}</td><td>${E(e.description)}</td>
+      <td class="num mono">${e.debit ? fmt(e.debit) : ""}</td><td class="num mono">${e.credit ? fmt(e.credit) : ""}</td><td class="num mono">${fmt(e.balance)}</td></tr>`).join("")}</tbody></table>`
+    : `<div class="empty">No entries for this principal yet.</div>`;
+}
+document.getElementById("goBtn").onclick = show;
+document.getElementById("pSel").onchange = show;
+document.getElementById("eType").onchange = (e) => { document.getElementById("eAccLabel").textContent = e.target.value === "Received" ? "Received into (bank / cash) *" : "Paid from (bank / cash) *"; };
+document.getElementById("saveE").onclick = async () => {
+  const name = document.getElementById("pSel").value; if (!name) return toast("Choose a principal", "error");
+  try {
+    const r = await api("POST", `/api/principal-soa/${encodeURIComponent(name)}/entry`, { type: eType.value, date: eDate.value, account: eAcc.value, amount: eAmt.value, job_no: eJob.value, ref: eRef.value, description: eDesc.value });
+    toast(`Saved — voucher ${r.voucher}`, "success"); eAmt.value = ""; eJob.value = ""; eRef.value = ""; eDesc.value = ""; show();
+  } catch (e) { toast(e.message, "error"); }
+};
+(async function init() {
+  await renderTopNav("accounting/principal-soa.html");
+  eDate.value = today();
+  const [parties, accounts] = await Promise.all([api("GET", "/api/parties"), api("GET", "/api/accounts")]);
+  const pr = parties.filter(p => p.is_principal);
+  pSel.innerHTML = pr.map(p => `<option value="${E(p.name)}">${E(p.name)}${p.code ? " — " + E(p.code) : ""}</option>`).join("");
+  eAcc.innerHTML = accounts.filter(a => a.type === "Asset").map(a => `<option value="${E(a.code)}">${E(a.code)} — ${E(a.name)}</option>`).join("");
+  const q = new URLSearchParams(location.search).get("principal"); if (q) pSel.value = q;
+  show();
+})();
+</script>
+</body>
+</html>
